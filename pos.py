@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 
-import sys
+from os import path
+import json
+import crosses
+import solve
 from PySide2.QtWidgets import QApplication, QLabel, QMainWindow, QSizePolicy, QScrollArea
 from PySide2.QtGui import QImageReader, QPixmap
 from PySide2.QtCore import Qt
 
-IMG_FILE = "/home/boris/Desktop/BehindParking/DCIM/100MEDIA/DJI_0004.JPG"
+IMG_FILE = "/home/boris/Desktop/BehindParking/DCIM/100MEDIA/DJI_0006.JPG"
 
 
 class MyScrollArea(QScrollArea):
@@ -36,17 +39,21 @@ class CrossMarker(QLabel):
     SELECTED_SS = "QLabel { background-color : red; color : blue; }"
     NORMAL_SS = "QLabel { background-color : white; color : black; }"
 
-    def __init__(self, parent, x, y):
+    def __init__(self, parent, x, y, name=None):
         QLabel.__init__(self, parent)
-        self.setText("???")
-        self.setStyleSheet(self.SELECTED_SS)
-        self.show()
-
         self.pixX = x
         self.pixY = y
 
-        self.name = None
+        self.name = name
         self.overwrite_name = True
+
+        if self.name is None:
+            self.setText("???")
+        else:
+            self.setText(self.name)
+
+        self.setStyleSheet(self.SELECTED_SS)
+        self.show()
 
     def zoom(self, scaleFactor):
         self.move(self.pixX * scaleFactor, self.pixY * scaleFactor)
@@ -70,10 +77,13 @@ class CrossMarker(QLabel):
 
 
 class Markers:
-    def __init__(self, parent):
+    def __init__(self, parent, file):
         self.parent_widget = parent
+        self.file = file
         self.markers = []
         self.selected = None
+
+        self.load()
 
     def add(self, x, y, scaleFactor):
         m = CrossMarker(self.parent_widget, x, y)
@@ -106,6 +116,26 @@ class Markers:
 
         self.markers[self.selected].select()
 
+    def load(self):
+        print("loading from %s" % self.file)
+        if not path.isfile(self.file):
+            print("no file, loading nothing")
+            return
+
+        with open(self.file, "r") as f:
+            markers = json.load(f)
+            for name, x, y in markers:
+                cm = CrossMarker(self.parent_widget, x, y, name)
+                cm.unselect()
+                cm.zoom(1)
+                self.markers.append(cm)
+
+    def save(self):
+        print("saving markers to %s" % self.file)
+        markes_list = [(m.name, m.pixX, m.pixY) for m in self.markers]
+        with open(self.file, "w") as f:
+            json.dump(markes_list, f, indent=True)
+
     def delete_selected(self):
         if self.selected is None:
             return
@@ -123,6 +153,28 @@ class Markers:
     def dump(self):
         for m in self.markers:
             print("%s %s %s" % (m.name, m.pixX, m.pixY))
+
+    def calc_pos(self):
+        calculate_position(self.markers)
+
+
+def calculate_position(markers):
+    print("do the calculation")
+
+    pos = crosses.get_positions()
+
+    gnss = []
+    pix = []
+
+    for m in markers:
+        gnss.append(pos[m.name])
+        pix.append((m.pixX, m.pixY))
+
+    print(gnss, pix)
+
+    t = solve.gen_sol(gnss, pix)
+    print(t.to_gnss(5472/2, 3648/2))
+
 
 
 class KeysManager:
@@ -148,6 +200,11 @@ class KeysManager:
 
         if text == "D":
             self.markers.dump()
+            return
+
+        if text == "C":
+            self.markers.calc_pos()
+            return
 
 
 class Viewer(QMainWindow):
@@ -161,7 +218,7 @@ class Viewer(QMainWindow):
         self.imageLabel.setScaledContents(True)
         self.imageLabel.show()
 
-        self.markers = Markers(self.imageLabel)
+        self.markers = Markers(self.imageLabel, IMG_FILE[:-3] + "json")
 
         km = KeysManager(self.markers)
 
@@ -207,6 +264,9 @@ class Viewer(QMainWindow):
 
         self.markers.add(x, y, self.scaleFactor)
 
+    def save_markers(self):
+        self.markers.save()
+
 
 def load_img():
     img = QImageReader(IMG_FILE).read()
@@ -220,7 +280,9 @@ def main():
     viewer = Viewer()
     viewer.load_image()
 
-    sys.exit(app.exec_())
+    app.exec_()
+    viewer.save_markers()
+    print("finito")
 
 
 if __name__ == '__main__':
